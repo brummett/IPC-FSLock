@@ -3,7 +3,8 @@
 use strict;
 use warnings;
 
-use FileLock;
+use lib 'lib';
+use IPC::FSLock;
 use Fcntl qw(LOCK_SH LOCK_EX LOCK_NB);
 
 my $type;
@@ -19,9 +20,9 @@ if ($ARGV[1] and $ARGV[1] eq 'nb') {
 
 print "Trying to get a lock...\n";
 {
-    my $lock = FileLock->create(lock_type => $type,
-                                path => '/tmp/locks/foo',
-                                timeout => 5);
+    my $lock = IPC::FSLock->create(lock_type => $type,
+                                   path => '/tmp/locks/foo',
+                                   timeout => 5);
 
     unless ($lock) {
         die "Couldn't get lock";

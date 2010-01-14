@@ -1,4 +1,4 @@
-package FileLock;
+package IPC::FSLock;
 
 use strict;
 use warnings;
@@ -8,8 +8,6 @@ use Fcntl qw(LOCK_EX LOCK_NB LOCK_SH);
 use Errno qw(EEXIST ENOTEMPTY ENOENT);
 use Time::HiRes qw(sleep);
 use Carp;
-
-our $LOCK_DIR_BASE;
 
 sub create {
     my($class,%params) = @_;
