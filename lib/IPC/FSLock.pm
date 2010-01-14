@@ -14,14 +14,12 @@ sub create {
 
     # Verify input params.  Expected: lock_type, path, sleep, timeout
     my $type_flags = delete $params{'lock_type'};
+    $type_flags = LOCK_EX unless (defined $type_flags);  # default exclusive lock
     my $is_exclusive_lock = $type_flags & LOCK_EX;
     my $is_shared_lock    = $type_flags & LOCK_SH;
     my $is_non_blocking   = $type_flags & LOCK_NB;
 
-    if (! $is_exclusive_lock and ! $is_shared_lock) {
-        $is_exclusive_lock = 1;  # Default type is exclusive
-
-    } elsif ($is_exclusive_lock and $is_shared_lock) {
+    if ($is_exclusive_lock and $is_shared_lock) {
         Carp::croak "Can't create a lock that is both shared and exclusive";
     }
 
@@ -63,22 +61,23 @@ sub create {
                };
     bless $self, $class;
 
+    my $timeofday = Time::HiRes::gettimeofday;
     if ($self->is_shared) {
         unless ( ($self->{'reservation_dir'}) = (glob($resource_lock_dir . "shared-*/"))[-1] ) {
-            $self->{'reservation_dir'} = $resource_lock_dir . sprintf('shared-%s-pid%d-%d/',$ENV{'HOST'},$$,time());
+            $self->{'reservation_dir'} = $resource_lock_dir . sprintf('shared-%s-pid%d-%s/',$ENV{'HOST'},$$,$timeofday);
         } 
         $self->{'reservation_file'} = $self->{'reservation_dir'} .
-                                  sprintf('%s-pid%d-%d',
+                                  sprintf('%s-pid%d-%s',
                                           $ENV{'HOST'},
                                           $$,
-                                          time());
+                                          $timeofday);
     } else {
         # exclusive
         $self->{'reservation_dir'} = $resource_lock_dir .
-                                 sprintf('excl-%s-pid%d-%d/',
+                                 sprintf('excl-%s-pid%d-%s/',
                                          $ENV{'HOST'},
                                          $$,
-                                         time());
+                                         $timeofday);
     }
                        
     # Declare my intention to lock
@@ -150,7 +149,7 @@ sub _create_reservation_directory {
         # Exclusive locks should always succeed 
         # Shared locks may fail only if that path already exists
         if ($self->is_exclusive or ($self->is_shared and $! != EEXIST)) {
-            Carp::croak("Can't make reservation directory for lock: $!");
+            Carp::croak("Can't make reservation directory for lock ".$self->{'reservation_dir'}.": $!");
         }
     }
     return 1;
@@ -224,6 +223,8 @@ sub _remove_resource_lock_directory {
 
 sub unlock {
     my $self = shift;
+
+    return unless $self->is_valid;
 
     # After a fork(), only the parent should be allowed to unlock?
     return unless $self->{'pid'} == $$; 
