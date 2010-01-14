@@ -30,10 +30,15 @@ sub create {
     $resource_lock_dir .= '/';
 
     my $sleep = delete $params{'sleep'};
-    $sleep ||= 1;  # sleep time between attempts.  Don't allow 0
+    $sleep ||= 60;  # sleep time between attempts.  Don't allow 0
 
     my $retry_forever;
     my $timeout_time = delete $params{'timeout'};
+
+    if (defined($timeout_time) and $sleep > $timeout_time) {
+        $sleep = $timeout_time;
+    }
+
     if (defined $timeout_time) {
         $retry_forever = 0;
         $timeout_time += time();
@@ -47,20 +52,23 @@ sub create {
 
     # Done parsing parameters
 
-    {
-        mkdir $resource_lock_dir;
-        my $mkdir_error = $! . '';
-        unless (-d $resource_lock_dir) {
-            Carp::croak "Can't create lock directory $resource_lock_dir: $mkdir_error";
-        }
-    }
-
     my $self = { is_exclusive => $is_exclusive_lock,
                  resource_lock_dir => $resource_lock_dir,
                  pid => $$,
                };
     bless $self, $class;
 
+    # Make the top-level directory for all locks on this resource
+    unless (mkdir $resource_lock_dir) {
+        if ($! != EEXIST) {
+            Carp::croak("Can't create lock directory $resource_lock_dir: $!");
+        }
+    }
+    unless (-d $resource_lock_dir) {
+        Carp::croak("Lock directory $resource_lock_dir exists, but is not a directory");
+    }
+
+    # Figure out the reservation directory/file names
     my $timeofday = Time::HiRes::gettimeofday;
     if ($self->is_shared) {
         unless ( ($self->{'reservation_dir'}) = (glob($resource_lock_dir . "shared-*/"))[-1] ) {
@@ -100,11 +108,17 @@ sub _create_lock_symlink {
         do {
             # if no symlink existed before, this will succeed and we have the lock
             last if symlink $self->{'reservation_dir'}, $wanted_symlink;  # got the lock
+            unless ($! == EEXIST) {
+                Carp::croak("Can't create lock symlink $wanted_symlink: $!");
+            }
 
             if ($self->is_shared) {
                 # For sh locks, there may already be another sh lock active
                 # see if the symlink points to the shared/ directory
                 my $points_to = readlink $wanted_symlink;
+                if (!$points_to) {
+                    Carp::croak("Can't readlink the lock symlink $wanted_symlink: $!");
+                }
                 last if ($points_to eq $self->{'reservation_dir'});   # another sh has the lock, we're ok to go
             }
             
@@ -163,7 +177,7 @@ sub _create_reservation_file {
         $fh->close();
         return 1;
     } else {
-        if ($! != ENOENT) {
+        if ($! != ENOENT) {  # ENOENT means some part of the path didn't exist
             Carp::croak("Can't create reservation file ".$self->{'reservation_file'}.": $!");
         }
         return;

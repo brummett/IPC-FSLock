@@ -19,18 +19,18 @@ ok($lock, 'Created exclusive lock');
 ok($lock->is_valid, 'lock is valid');
 
 alarm(1);
-my $lock2 = IPC::FSLock->create(path => $path, lock_type => LOCK_EX | LOCK_NB);
+my $lock2 = IPC::FSLock->create(path => $path, lock_type => LOCK_EX | LOCK_NB, 'sleep' => 1);
 alarm(0);
 ok(! $lock2, "Could not create another exclusive lock, (probably) didn't block");
 
 alarm(1);
-$lock2 = IPC::FSLock->create(path => $path, lock_type => LOCK_SH | LOCK_NB);
+$lock2 = IPC::FSLock->create(path => $path, lock_type => LOCK_SH | LOCK_NB, 'sleep' => 1);
 alarm(0);
 ok(! $lock2, "Could not create another shared lock, (probably) didn't block");
 
 my $before_time = time();
 alarm(5);
-$lock2 = IPC::FSLock->create(path => $path, lock_type => LOCK_EX, timeout => 2);
+$lock2 = IPC::FSLock->create(path => $path, lock_type => LOCK_EX, timeout => 2, 'sleep' => 1);
 alarm(0);
 my $after_time = time();
 ok(! $lock2, "Couldn't create another exclusive lock");
@@ -38,7 +38,7 @@ ok($after_time > $before_time, 'It waited at some time');
 
 $before_time = time();
 alarm(5);
-$lock2 = IPC::FSLock->create(path => $path, lock_type => LOCK_SH, timeout => 2);
+$lock2 = IPC::FSLock->create(path => $path, lock_type => LOCK_SH, timeout => 2, 'sleep' => 1);
 alarm(0);
 $after_time = time();
 ok(! $lock2, "Couldn't create another shared lock");
@@ -49,7 +49,7 @@ my $alarmed = 0;
 $SIG{'ALRM'} = sub {$alarmed = 1;};
 $before_time = time();
 alarm(1);
-$lock2 = IPC::FSLock->create(path => $path, lock_type => LOCK_EX, timeout => 3);
+$lock2 = IPC::FSLock->create(path => $path, lock_type => LOCK_EX, timeout => 3, 'sleep' => 1);
 alarm(0);
 $after_time = time();
 ok(! $lock2, "Couldn't create another exclusive lock");
@@ -59,7 +59,7 @@ ok($alarmed, 'waited at least 1 second');
 $alarmed = 0;
 $before_time = time();
 alarm(1);
-$lock2 = IPC::FSLock->create(path => $path, lock_type => LOCK_SH, timeout => 3);
+$lock2 = IPC::FSLock->create(path => $path, lock_type => LOCK_SH, timeout => 3, 'sleep' => 1);
 alarm(0);
 $after_time = time();
 ok(! $lock2, "Couldn't create another shared lock");
