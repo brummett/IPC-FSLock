@@ -40,11 +40,15 @@ sub create {
 
     my $self = { style => $params{'style'},
                  resource_lock_dir => $resource_lock_dir,
+                 pid => $$,
                };
     bless $self, $class;
 
     if ($params{'style'} eq 'sh') {
-        $self->{'reservation_dir'} = $resource_lock_dir . 'shared/';
+        #$self->{'reservation_dir'} = $resource_lock_dir . 'shared/';
+        unless ( ($self->{'reservation_dir'}) = (glob($resource_lock_dir . "shared-*/"))[-1] ) {
+            mkdir $self->{'reservation_dir'} = $resource_lock_dir . sprintf('shared-%s-pid%d-%d/',$ENV{'HOST'},$$,time());
+        } 
         $self->{'reservation_file'} = $self->{'reservation_dir'} .
                                   sprintf('%s-pid%d-%d',
                                           $ENV{'HOST'},
@@ -53,7 +57,7 @@ sub create {
     } else {
         # exclusive
         $self->{'reservation_dir'} = $resource_lock_dir .
-                                 sprintf('writer-%s-pid%d-%d/',
+                                 sprintf('excl-%s-pid%d-%d/',
                                          $ENV{'HOST'},
                                          $$,
                                          time());
@@ -107,22 +111,36 @@ sub create {
 sub unlock {
     my $self = shift;
 
-    # shared locks, first remove their file inside the shared/ directory
+    # After a fork(), only the parent should be allowed to unlock?
+    return unless $self->{'pid'} == $$; 
+
     if ($self->{'style'} eq 'sh') {
+        # shared locks, first remove their file inside the shared/ directory
         unlink $self->{'reservation_file'};
-    }
 
-    # Next, remove the lock directory.  
-    # For ex locks, this will always succeed
-    # for sh locks, this will fail if another also has a sh lock
-    my $rv = rmdir $self->{'reservation_dir'};
-    if ($rv) {
-        # If directory was removed, then the lock can be declared free
-        # remove the symlink
+        # Remove the reservation directory
+        my $rv = rmdir $self->{'reservation_dir'};
+
+        # There's a tiny window here where the lock symlink exists, but points to
+        # a non-existent shared reservation directory.  Hope we don't crash and
+        # leave the lock hanging.  There's probably not much we can do to prevent this.
+        
+        # If that worked, we were the last shared lock, remove the lock symlink
+        if ($rv) {
+            unlink $self->{'symlink'} if ($self->{'symlink'});
+        }
+
+    } else {
+        # excl locks
+        
+        # We can safely remove the lock symlink first, giving up the lock
         unlink $self->{'symlink'} if ($self->{'symlink'});
+
+        # Remove our dir to clean up
+        rmdir $self->{'reservation_dir'};
     }
 
-    rmdir $self->{'resource_lock_dir'};
+    rmdir $self->{'resource_lock_dir'};  # If we're the last for this resource, clean up
 
     # make ourselves invalid
     delete $self->{$_} foreach keys %$self;
