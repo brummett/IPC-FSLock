@@ -1,0 +1,35 @@
+Lock dir structure
+
+symlink--------> readers/  r1
+                           r2
+                           r3
+                  writer1/
+                  writer2/
+
+Aquire lock:
+
+do {
+    redo unless mkdir $lock_dir
+    if(readlock) {
+        redo unless create reader_file
+}
+while(1) {
+    return 1 if symlink
+    if (readlock) {
+        my $points_to = readlink
+        return 1 if $points_to =~ m/readers/
+    }
+    sleep
+}
+
+Give up lock:
+
+if (readlock) {
+   unlink reader_file
+}
+$rv = rmdir lock_dir
+if ($rv) {
+    unlink symlink
+}
+return 1
+    
