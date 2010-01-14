@@ -1,0 +1,38 @@
+#!/gsc/bin/perl
+
+use strict;
+use warnings;
+
+use FileLock;
+use Fcntl qw(LOCK_SH LOCK_EX LOCK_NB);
+
+my $type;
+if ($ARGV[0] eq 'sh') {
+    $type = LOCK_SH;
+} elsif ($ARGV[0] eq 'ex') {
+    $type = LOCK_EX;
+}
+
+if ($ARGV[1] and $ARGV[1] eq 'nb') {
+    $type |= LOCK_NB;
+}
+
+print "Trying to get a lock...\n";
+{
+    my $lock = FileLock->create(lock_type => $type,
+                                path => '/tmp/locks/foo',
+                                timeout => 5);
+
+    unless ($lock) {
+        die "Couldn't get lock";
+    }
+
+    print "Holding the lock until you press enter\n";
+    scalar(<STDIN>);
+
+    print "Giving it up\n";
+    #$lock->unlock;
+}
+
+print "Done\n";
+
