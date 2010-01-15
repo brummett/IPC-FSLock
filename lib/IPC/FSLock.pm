@@ -7,7 +7,9 @@ use IO::File;
 use Fcntl qw(LOCK_EX LOCK_NB LOCK_SH);
 use Errno qw(EEXIST ENOTEMPTY ENOENT);
 use Time::HiRes qw(sleep);
+use Sys::Hostname;
 use Carp;
+
 
 sub create {
     my($class,%params) = @_;
@@ -70,20 +72,21 @@ sub create {
 
     # Figure out the reservation directory/file names
     my $timeofday = Time::HiRes::gettimeofday;
+    my $hostname = Sys::Hostname::hostname();
     if ($self->is_shared) {
         unless ( ($self->{'reservation_dir'}) = (glob($resource_lock_dir . "shared-*/"))[-1] ) {
-            $self->{'reservation_dir'} = $resource_lock_dir . sprintf('shared-%s-pid%d-%s/',$ENV{'HOST'},$$,$timeofday);
+            $self->{'reservation_dir'} = $resource_lock_dir . sprintf('shared-%s-pid%d-%s/',$hostname,$$,$timeofday);
         } 
         $self->{'reservation_file'} = $self->{'reservation_dir'} .
                                   sprintf('%s-pid%d-%s',
-                                          $ENV{'HOST'},
+                                          $hostname,
                                           $$,
                                           $timeofday);
     } else {
         # exclusive
         $self->{'reservation_dir'} = $resource_lock_dir .
                                  sprintf('excl-%s-pid%d-%s/',
-                                         $ENV{'HOST'},
+                                         $hostname,
                                          $$,
                                          $timeofday);
     }
@@ -92,34 +95,31 @@ sub create {
     return unless
         $self->_create_reservation($retry_forever, $timeout_time, $sleep, $is_non_blocking);
 
-    # Try to aquire the lock
+    # Try to acquire the lock
     my $wanted_symlink = $self->{'resource_lock_dir'} . 'lock';
     return unless
-        $self->_create_lock_symlink($wanted_symlink, $retry_forever, $timeout_time, $sleep, $is_non_blocking);
+        $self->_acquire_lock($wanted_symlink, $retry_forever, $timeout_time, $sleep, $is_non_blocking);
 
     return $self;
 }
 
 
-sub _create_lock_symlink {
+sub _acquire_lock {
     my($self, $wanted_symlink, $retry_forever, $timeout_time, $sleep, $is_non_blocking) = @_;
 
-    AQUIRE: {
+    ACQUIRE: {
         do {
             # if no symlink existed before, this will succeed and we have the lock
-            last if symlink $self->{'reservation_dir'}, $wanted_symlink;  # got the lock
-            unless ($! == EEXIST) {
-                Carp::croak("Can't create lock symlink $wanted_symlink: $!");
-            }
+            last if $self->_create_lock_symlink($wanted_symlink);
 
             if ($self->is_shared) {
                 # For sh locks, there may already be another sh lock active
                 # see if the symlink points to the shared/ directory
-                my $points_to = readlink $wanted_symlink;
-                if (!$points_to) {
-                    Carp::croak("Can't readlink the lock symlink $wanted_symlink: $!");
-                }
-                last if ($points_to eq $self->{'reservation_dir'});   # another sh has the lock, we're ok to go
+                # If the link disappeard between the above symlink() and now, that's ok
+                # we'll just try again on the next iteration
+
+                # another sh has the lock, we're ok to go
+                last if ($self->_read_lock_symlink($wanted_symlink) eq $self->{'reservation_dir'});
             }
             
             last if ($is_non_blocking);
@@ -135,6 +135,30 @@ sub _create_lock_symlink {
     return 1;
 }
     
+sub _create_lock_symlink {
+    my($self, $wanted_symlink) = @_;
+
+    my $rv = symlink $self->{'reservation_dir'}, $wanted_symlink;
+    if (!$rv and $! != EEXIST) {
+        Carp::croak("Can't create lock symlink $wanted_symlink: $!");
+    }
+    return $rv;
+}
+
+sub _read_lock_symlink {
+    my($self, $wanted_symlink) = @_;
+
+    $wanted_symlink = $self->{'symlink'} unless defined $wanted_symlink;
+
+    my $points_to = readlink $wanted_symlink;
+    # The symlink may have disappeared between the attempt to create it and
+    # now.  That is the only OK reason readlink may have failed
+    if (! defined($points_to) and $! != ENOENT) {
+        Carp::croak("Can't readlink the lock symlink $wanted_symlink: $!");
+    }
+    return $points_to;
+}
+        
 
 sub _create_reservation {
     my($self, $retry_forever, $timeout_time, $sleep, $is_non_blocking) = @_;
@@ -235,6 +259,36 @@ sub _remove_resource_lock_directory {
 }
 
 
+sub is_lock_mine {
+    my $self = shift;
+
+    return unless($self->is_valid and $self->{'symlink'});
+
+    my $symlink = $self->{'symlink'};
+    unless (-e $symlink) {
+        Carp::carp("Lock is_valid, but the symlink $symlink does not exist");
+        return;
+    }
+
+    unless (-l $symlink) {
+        Carp::carp("Lock is_valid, but $symlink is not actually a symlink");
+        return;
+    }
+
+    my $points_to = $self->_read_lock_symlink;
+    return unless $points_to;
+
+    my $hostname = Sys::Hostname::hostname;
+    if ($self->is_exclusive) {
+        return $points_to =~ m/excl-$hostname-pid$$/;
+    } else {
+        return unless ($points_to =~ m/shared-/);
+        return unless (index($self->{'reservation_file'}, $points_to) >= 0);
+        return unless (-f $self->{'reservation_file'});
+    }
+}
+
+
 sub unlock {
     my $self = shift;
 
@@ -242,6 +296,16 @@ sub unlock {
 
     # After a fork(), only the parent should be allowed to unlock?
     return unless $self->{'pid'} == $$; 
+
+    unless ($self->is_lock_mine) {
+        Carp::carp("Lock symlink ".$self->{'symlink'}." does not appear to be owned by me");
+    }
+
+    $self->_do_unlock();
+}
+
+sub _do_unlock {
+    my $self = shift;
 
     if ($self->is_shared) {
         # shared locks, first remove their file inside the shared/ directory
@@ -283,7 +347,7 @@ sub unlock {
 
 
 sub DESTROY {
-    goto &unlock;
+    goto &_do_unlock;
 }
 
 
