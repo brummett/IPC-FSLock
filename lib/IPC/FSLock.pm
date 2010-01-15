@@ -130,7 +130,7 @@ sub _acquire_lock {
                 # we'll just try again on the next iteration
 
                 # another sh has the lock, we're ok to go
-                last if ($self->_read_lock_symlink eq $self->{'reservation_dir'});
+                last if ($self->_verify_lock_symlink);
             }
             
             last if ($is_non_blocking);
@@ -139,7 +139,7 @@ sub _acquire_lock {
         } while ($retry_forever or time <= $timeout_time);
     }
 
-    return unless ($self->_read_lock_symlink eq $self->{'reservation_dir'});
+    return unless ($self->_verify_lock_symlink);
 
     return 1;
 }
@@ -154,6 +154,13 @@ sub _create_lock_symlink {
         Carp::croak("Can't create lock symlink $wanted_symlink: $!");
     }
     return $rv;
+}
+
+sub _verify_lock_symlink {
+    my $self = shift;
+
+    my $points_to = $self->_read_lock_symlink;
+    return $points_to eq $self->{'reservation_dir'};
 }
 
 sub _read_lock_symlink {
