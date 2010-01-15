@@ -53,12 +53,32 @@ sub create {
     }
 
     # Done parsing parameters
+    my $self = $class->_setup_object({ is_exclusive => $is_exclusive_lock,
+                                      resource_lock_dir => $resource_lock_dir,
+                                      pid => $$,
+                                    });
 
-    my $self = { is_exclusive => $is_exclusive_lock,
-                 resource_lock_dir => $resource_lock_dir,
-                 pid => $$,
-               };
+    # Declare my intention to lock
+    return unless
+        $self->_create_reservation($retry_forever, $timeout_time, $sleep, $is_non_blocking);
+
+    # Try to acquire the lock
+    return unless
+        $self->_acquire_lock($retry_forever, $timeout_time, $sleep, $is_non_blocking);
+
+    $self->{'is_valid'} = 1;
+
+    return $self;
+}
+
+
+sub _setup_object {
+    my($class,$self) = @_;
+
     bless $self, $class;
+
+    my $resource_lock_dir = $self->{'resource_lock_dir'};
+    $self->{'symlink'} = $self->{'resource_lock_dir'} . 'lock';
 
     # Make the top-level directory for all locks on this resource
     unless (mkdir $resource_lock_dir) {
@@ -90,27 +110,18 @@ sub create {
                                          $$,
                                          $timeofday);
     }
-                       
-    # Declare my intention to lock
-    return unless
-        $self->_create_reservation($retry_forever, $timeout_time, $sleep, $is_non_blocking);
-
-    # Try to acquire the lock
-    my $wanted_symlink = $self->{'resource_lock_dir'} . 'lock';
-    return unless
-        $self->_acquire_lock($wanted_symlink, $retry_forever, $timeout_time, $sleep, $is_non_blocking);
 
     return $self;
 }
-
+ 
 
 sub _acquire_lock {
-    my($self, $wanted_symlink, $retry_forever, $timeout_time, $sleep, $is_non_blocking) = @_;
+    my($self, $retry_forever, $timeout_time, $sleep, $is_non_blocking) = @_;
 
     ACQUIRE: {
         do {
             # if no symlink existed before, this will succeed and we have the lock
-            last if $self->_create_lock_symlink($wanted_symlink);
+            last if $self->_create_lock_symlink;
 
             if ($self->is_shared) {
                 # For sh locks, there may already be another sh lock active
@@ -119,7 +130,7 @@ sub _acquire_lock {
                 # we'll just try again on the next iteration
 
                 # another sh has the lock, we're ok to go
-                last if ($self->_read_lock_symlink($wanted_symlink) eq $self->{'reservation_dir'});
+                last if ($self->_read_lock_symlink eq $self->{'reservation_dir'});
             }
             
             last if ($is_non_blocking);
@@ -128,15 +139,15 @@ sub _acquire_lock {
         } while ($retry_forever or time <= $timeout_time);
     }
 
-    return unless (readlink($wanted_symlink) eq $self->{'reservation_dir'});
-
-    $self->{'symlink'} = $wanted_symlink;
+    return unless ($self->_read_lock_symlink eq $self->{'reservation_dir'});
 
     return 1;
 }
     
 sub _create_lock_symlink {
-    my($self, $wanted_symlink) = @_;
+    my $self = shift;
+
+    my $wanted_symlink = $self->{'symlink'};
 
     my $rv = symlink $self->{'reservation_dir'}, $wanted_symlink;
     if (!$rv and $! != EEXIST) {
@@ -146,9 +157,9 @@ sub _create_lock_symlink {
 }
 
 sub _read_lock_symlink {
-    my($self, $wanted_symlink) = @_;
+    my $self = shift;
 
-    $wanted_symlink = $self->{'symlink'} unless defined $wanted_symlink;
+    my $wanted_symlink = $self->{'symlink'};
 
     my $points_to = readlink $wanted_symlink;
     # The symlink may have disappeared between the attempt to create it and
@@ -262,7 +273,7 @@ sub _remove_resource_lock_directory {
 sub is_lock_mine {
     my $self = shift;
 
-    return unless($self->is_valid and $self->{'symlink'});
+    return unless $self->is_valid;
 
     my $symlink = $self->{'symlink'};
     unless (-e $symlink) {
@@ -320,14 +331,14 @@ sub _do_unlock {
         
         # If that worked, we were the last shared lock, remove the lock symlink
         if ($rv) {
-            $self->_remove_lock_symlink;
+            $self->_remove_lock_symlink if ($self->is_valid);
         }
 
     } else {
         # excl locks
         
         # We can safely remove the lock symlink first, giving up the lock
-        $self->_remove_lock_symlink;
+        $self->_remove_lock_symlink if ($self->is_valid);
 
         # Remove our dir to clean up
         unless ($self->_remove_reservation_directory) {
@@ -341,7 +352,7 @@ sub _do_unlock {
     #$self->_remove_resource_lock_directory;
 
     # make ourselves invalid
-    delete $self->{$_} foreach keys %$self;
+    delete $self->{is_valid};
 
     return 1;
 }
@@ -370,7 +381,7 @@ sub is_exclusive {
 }
 
 sub is_valid {
-    return keys %{$_[0]};
+    return $_[0]->{'is_valid'};
 }
 
 
