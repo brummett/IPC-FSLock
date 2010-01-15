@@ -112,13 +112,8 @@ sub do_state_transisitions {
 
         my($result, $reason) = &run_machines_with_path($current_path, @machines);
 
-        CRANK_MACHINES:
-        while(grep { ! $_->is_done } @machines) {
-            $current_bit = 0;
-            my $mask = 1 << $current_bit;
-            my $which = $current_path & $mask;
-
-            $machine[$which]->do_next_state;
+    }
+}
 
 sub run_machines_with_path {
     my($this_path,@machines) = @_;
