@@ -10,6 +10,7 @@ use Time::HiRes qw(sleep);
 use Sys::Hostname;
 use Carp;
 
+use constant MKDIR_MASK => 02775;
 
 sub create {
     my($class,%params) = @_;
@@ -81,7 +82,7 @@ sub _setup_object {
     $self->{'symlink'} = $self->{'resource_lock_dir'} . 'lock';
 
     # Make the top-level directory for all locks on this resource
-    unless (mkdir $resource_lock_dir) {
+    unless (mkdir $resource_lock_dir, MKDIR_MASK) {
         if ($! != EEXIST) {
             Carp::croak("Can't create lock directory $resource_lock_dir: $!");
         }
@@ -201,7 +202,8 @@ sub _create_reservation {
 sub _create_reservation_directory {
     my $self = shift;
 
-    unless (mkdir $self->{'reservation_dir'}) {
+    # FIXME - switch to using File::Temp::tempdir
+    unless (mkdir $self->{'reservation_dir'}, MKDIR_MASK) {
         # Exclusive locks should always succeed 
         # Shared locks may fail only if that path already exists
         if ($self->is_exclusive or ($self->is_shared and $! != EEXIST)) {
