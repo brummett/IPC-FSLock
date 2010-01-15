@@ -224,7 +224,7 @@ sub _remove_reservation_file {
 sub _remove_reservation_directory {
     my $self = shift;
 
-    my $rv;
+    my $rv = "0 but true";
     if (defined $self->{'reservation_dir'}) {
         $rv = rmdir $self->{'reservation_dir'};
         if (! $rv and $! != ENOTEMPTY) {
@@ -330,7 +330,9 @@ sub _do_unlock {
         $self->_remove_lock_symlink;
 
         # Remove our dir to clean up
-        $self->_remove_reservation_directory;
+        unless ($self->_remove_reservation_directory) {
+            Carp::croak("Can't remove reservation directory: $!");
+        }
     }
 
     # If we're the last for this resource, clean up
