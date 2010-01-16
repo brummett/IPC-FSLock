@@ -95,6 +95,7 @@ sub _setup_object {
     my $timeofday = Time::HiRes::gettimeofday;
     my $hostname = Sys::Hostname::hostname();
     if ($self->is_shared) {
+        # FIXME - switch to using this as a tempdir pattern instead of a real directory pathname
         unless ( ($self->{'reservation_dir'}) = (glob($resource_lock_dir . "shared-*/"))[-1] ) {
             $self->{'reservation_dir'} = $resource_lock_dir . sprintf('shared-%s-pid%d-%s/',$hostname,$$,$timeofday);
         } 
@@ -144,7 +145,7 @@ sub _acquire_lock {
 
     return 1;
 }
-    
+
 sub _create_lock_symlink {
     my $self = shift;
 
