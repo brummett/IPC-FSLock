@@ -66,6 +66,3 @@ ok(! $lock2, "Couldn't create another shared lock");
 ok($after_time > $before_time, 'It waited some time');
 ok($alarmed, 'waited at least 1 second');
 
-
-
-
