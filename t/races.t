@@ -3,7 +3,7 @@ use warnings;
 
 use IPC::FSLock;
 use Fcntl qw(LOCK_EX LOCK_NB LOCK_SH);
-use Test::More skip_all => 'Not done yet';
+use Test::More tests => 7;
 
 use File::Temp;
 
@@ -59,60 +59,68 @@ $SIG{'ALRM'} = sub { ok(0, 'Got alarm'); exit };
 # Unlocked successfully
 
 
-
-# Fake up a couple of "lock" objects;
 ok(mkdir($path), 'Created lock directory');
-my $excl_lock1 = IPC::FSLock->_setup_object({ is_exclusive => 1,
-                                              resource_lock_dir => $path,
-                                              pid => 123,
-                                            });
-my $excl_lock2 = IPC::FSLock->_setup_object({ is_exclusive => 1,
-                                              resource_lock_dir => $path,
-                                              pid => 234,
-                                            });
-my $shared_lock1 = IPC::FSLock->_setup_object({ is_exclusive => 0,
-                                                resource_lock_dir => $path,
-                                                pid => 345,
-                                              });
-my $shared_lock2 = IPC::FSLock->_setup_object({ is_exclusive => 0,
-                                                resource_lock_dir => $path,
-                                                pid => 456,
-                                              });
-ok($excl_lock1 && $excl_lock2 && $shared_lock1 && $shared_lock2,
-   "Created raw lock objects"); 
 
-#my $retry_forever = 0;
-#my $timeout_time = 1;
-#my $sleep = 0.1;
-#my $is_non_blocking = 0;
-my $wanted_symlink = $path . 'lock';
+ok(&test_two_locks($path, 'IPC::FSLock::ExclLockStateMachine', 'IPC::FSLock::NullStateMachine'),
+   'Testing one exclusive lock');
 
-# Easy - lock and unlock excl lock
-ok($excl_lock1->_create_reservation_directory, '$excl_lock1->_create_reservation_directory');
-ok($excl_lock1->_create_lock_symlink($wanted_symlink), '$excl_lock1->_create_lock_symlink($wanted_symlink)');
-ok($excl_lock1->_remove_lock_symlink, '$excl_lock1->_remove_lock_symlink');
-ok($excl_lock1->_remove_reservation_directory, '$excl_lock1->_remove_lock_symlink');
+ok(&test_two_locks($path, 'IPC::FSLock::SharedLockStateMachine', 'IPC::FSLock::NullStateMachine'),
+   'Testing one shared lock');
 
-ok($excl_lock1->_create_reservation_directory, '$excl_lock1->_create_reservation_directory');
-ok($excl_lock2->_create_reservation_directory, '$excl_lock2->_create_reservation_directory');
-ok($excl_lock1->_create_lock_symlink($wanted_symlink), '$excl_lock1->_create_lock_symlink($wanted_symlink)');
-ok(! $excl_lock2->_create_lock_symlink($wanted_symlink), '! $excl_lock2->_create_lock_symlink($wanted_symlink)');
+ok(&test_two_locks($path, 'IPC::FSLock::SharedLockStateMachine', 'IPC::FSLock::SharedLockStateMachine'),
+   'Testing two shared locks');
+
+ok(&test_two_locks($path, 'IPC::FSLock::ExclLockStateMachine', 'IPC::FSLock::SharedLockStateMachine'),
+   'Testing exclusive lock and shared lock');
+
+ok(&test_two_locks($path, 'IPC::FSLock::SharedLockStateMachine', 'IPC::FSLock::ExclLockStateMachine'),
+   'Testing shared lock and exclusive lock');
+
+ok(&test_two_locks($path, 'IPC::FSLock::ExclLockStateMachine', 'IPC::FSLock::ExclLockStateMachine'),
+   'Testing two exclusive locks');
 
 
 
+sub test_two_locks {
+    my($lock_dir, $lock_type_1, $lock_type_2) = @_;
 
-sub do_state_transisitions {
-    my(@machines) = @_;
-    # only works on 2 machines
+    my $type1_nodes = $lock_type_1->nodes;
+    my $type1_node_count = scalar(keys %$type1_nodes);
+    my $type2_nodes = $lock_type_2->nodes;
+    my $type2_node_count = scalar(keys %$type2_nodes);
 
-    my %done_transisitions;
-
-    CHECK_PERMUATATIONS:
-    for (my $current_path = 0; ; $current_path++) {
-
-        my($result, $reason) = &run_machines_with_path($current_path, @machines);
-
+    my $max_reps;
+    if ($type1_node_count > $type2_node_count) {
+        $max_reps = 1 << $type1_node_count;
+    } else {
+        $max_reps = 1 << $type2_node_count;
     }
+
+    CHECK_PERMUTATIONS:
+    for (my $current_path = 0; $current_path < $max_reps; $current_path++) {
+
+        my $lock1 = IPC::FSLock->_setup_object({ is_exclusive => ($lock_type_1 =~ m/Excl/) ? 1 : 0,
+                                                 resource_lock_dir => $lock_dir,
+                                                 pid => 123,
+                                             });
+        my $lock2;
+        if ($lock_type_2 ne 'IPC::FSLock::NullStateMachine') { 
+            $lock2 = IPC::FSLock->_setup_object({ is_exclusive => ($lock_type_2 =~ m/Excl/) ? 1 : 0,
+                                                  resource_lock_dir => $lock_dir,
+                                                  pid => 456,
+                                              });
+        }
+
+        my $machine1 = $lock_type_1->new($lock1);
+        my $machine2 = $lock_type_2->new($lock2);
+
+        my($result, $reason) = eval { &run_machines_with_path($current_path, $machine1, $machine2) };
+        unless ($result) {
+            diag "Path $current_path failed.  Reason: $reason  Exception: $@";
+            return;
+        }
+    }
+    return 1;
 }
 
 sub run_machines_with_path {
@@ -124,7 +132,10 @@ sub run_machines_with_path {
     while(grep { ! $_->is_done } @machines) {
         my $mask = 1 << $current_bit++;
 
-        my $which = $this_path & $mask;
+        my $which = ($this_path & $mask) ? 1 : 0;
+        if ($machines[$which]->is_done) {
+            $which = !$which;
+        }
         $machines[$which]->do_next_state;
 
         my $current_state = join(':',map { $_->last_state } @machines);
@@ -132,9 +143,8 @@ sub run_machines_with_path {
             return (0, 'Looping state detected');
         }
     }
+    return (1,'Done');
 }
-        
-
 
 
 package IPC::FSLock::StateMachine;
@@ -157,7 +167,7 @@ sub last_result {
 sub is_done {
     my $self = shift;
     my $state = $self->last_state;
-    return $state eq 'done' or $state eq 'no_nothing';
+    return ($state eq 'done') || ($state eq 'do_nothing');
 }
 
 sub do_next_state {
@@ -170,20 +180,26 @@ sub do_next_state {
     if ($next_state eq 'die') {
         die "Got into 'die' state";
 
-    } elsif ($next_state eq 'no_nothing') {
+    } elsif ($next_state eq 'do_nothing') {
+        $self->{'state'} = 'do_nothing';
         return 1;
 
     } elsif ($next_state ne 'done') {
+        alarm(5) unless ($^P);
         my $rv = $self->{'obj'}->$next_state;
+        alarm(0);
         $self->{'result'} = $rv;
         $self->{'state'} = $next_state;
+    } elsif ($next_state eq 'done') {
+        $self->{'result'} = 1;
+        $self->{'state'} = 'done';
     }
     return $self->{'result'};
 }
 
 
 package IPC::FSLock::SharedLockStateMachine;
-our @ISA = qw( IPC::FSLock::StateMachine );
+use base 'IPC::FSLock::StateMachine';
 
 sub nodes {
     return { 'new' => {
@@ -223,7 +239,7 @@ sub nodes {
 
 
 package IPC::FSLock::ExclLockStateMachine;
-our @ISA = qw( IPC::FSLock::StateMachine );
+use base 'IPC::FSLock::StateMachine';
 
 sub nodes {
     return { 'new' => {
@@ -253,7 +269,7 @@ sub nodes {
 }
 
 package IPC::FSLock::NullStateMachine;
-our @ISA = qw( IPC::FSLock::StateMachine );
+use base 'IPC::FSLock::StateMachine';
 
 sub nodes {
     return { 'new' => {
